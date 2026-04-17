@@ -10,7 +10,7 @@ This repository demonstrates how to measure an external signal frequency using t
 
 TC0 acts as a precise 1ms gate timer, TC2 counts incoming pulses from an external signal routed through GCLKIN → GCLK3 → PCHCTRL[26], and the result is printed over UART via SERCOM2. TC4 generates the test signal used as the input source.
 
-> **Key insight:** GCLK3 and TC2 must be initialized **after** TC4 starts, because GCLK3 is sourced from GCLKIN (an external pin). Initializing GCLK3 before the clock source is present causes the synchronization busy-loop to hang indefinitely.
+> **Key insight:** GCLK3 and TC2 must be initialized **after** external signal is provided, because GCLK3 is sourced from GCLKIN (an external pin). Initializing GCLK3 before the clock source is present causes the synchronization busy-loop to hang indefinitely.
 
 ## Related Documentation
 
@@ -23,7 +23,7 @@ TC0 acts as a precise 1ms gate timer, TC2 counts incoming pulses from an externa
 ## How It Works
 
 ```
-TC4 (Compare/PWM output)
+SIganl input/PWM
   │
   └─► GCLKIN pin ──► GCLK3 (SRC=2, DIV=1) ──► PCHCTRL[26] ──► TC2 (counts pulses)
                                                                        │
@@ -46,6 +46,8 @@ Since TC2 counts pulses over 1ms, dividing by 1000 converts counts/ms to MHz.
 ## Hardware Requirements
 
 * SAM E54 Xplained Pro development board
+  <img width="685" height="466" alt="image" src="https://github.com/user-attachments/assets/8a072a0d-2076-4a45-9f33-7b228778d33a" />
+
 
 ## MCC / Harmony 3 Project Graph
 
@@ -55,47 +57,64 @@ The following peripherals are configured in the MCC Project Graph:
 |---|---|---|
 | TC0 | Timer | 1ms gate — triggers callback on overflow |
 | TC2 | Timer | Pulse counter — clocked by GCLKIN via GCLK3 |
-| TC4 | Compare | Signal generator — drives GCLKIN pin |
 | SERCOM2 | UART | Printf output via STDIO |
 | EVSYS | Event System | Peripheral routing |
 | NVMCTRL | Memory | Flash wait states |
 
 ## Software Requirements
 
-* **MPLAB X IDE** (v6.20 or later)
+* **MPLAB X IDE** (v6.30 or later)
 * **XC32 Compiler**
 * **MPLAB Harmony 3 / MCC**
 
 ## MCC Configuration
+<img width="552" height="436" alt="image" src="https://github.com/user-attachments/assets/5cd9d8cc-c4c0-4a2d-ae03-34716590a177" />
+<img width="924" height="646" alt="image" src="https://github.com/user-attachments/assets/956d1e7d-aebc-46a7-89aa-ef062f6d609e" />
 
 ### TC0 — Gate Timer
 - Mode: Timer
 - Period: 1ms
 - Interrupt: Enabled (overflow callback)
+<img width="578" height="620" alt="image" src="https://github.com/user-attachments/assets/bb06874d-3558-405b-9648-a66b595b4b93" />
 
 ### TC2 — Pulse Counter
 - Mode: Timer (counter input)
 - Clock Source: GCLK3 (GCLKIN — external pin)
 - Size: 16-bit
 - **Note:** Do NOT initialize in `SYS_Initialize()` — must be called manually after GCLK3 is live
+<img width="580" height="634" alt="image" src="https://github.com/user-attachments/assets/a4e8df27-0732-4f38-87e9-0f104bd0016b" />
 
-### TC4 — Signal Generator
-- Mode: Compare (waveform output)
-- Output: Connected to GCLKIN pin
-- Started before GCLK3 initialization
+
+### GCLK3 — On Flock Configurator 
+<img width="2301" height="1019" alt="image" src="https://github.com/user-attachments/assets/67f91343-d2fa-4b6b-8763-3c05c5a8ffd2" />
 
 ### GCLK3 — Custom Initialization
 GCLK3 is **not** initialized by MCC. It is configured manually in `GCLK3_Initialize_Custom()`:
 
 ```c
-// Source = GCLKIN (SRC=2), DIV=1, Generator enabled
-GCLK_REGS->GCLK_GENCTRL[3] = GCLK_GENCTRL_DIV(1U)
-                             | GCLK_GENCTRL_SRC(2U)
-                             | GCLK_GENCTRL_GENEN_Msk;
+void GCLK3_Initialize_Custom(void)
+{
+    // Configure Generator 3: source = GCLKIN (pin), div = 1
+    GCLK_REGS->GCLK_GENCTRL[3] = GCLK_GENCTRL_DIV(1U)
+                                 | GCLK_GENCTRL_SRC(2U)
+                                 | GCLK_GENCTRL_GENEN_Msk;
 
-// Connect to TC2/TC3 peripheral channel (PCHCTRL index 26)
-GCLK_REGS->GCLK_PCHCTRL[26] = GCLK_PCHCTRL_GEN(0x3U)
-                              | GCLK_PCHCTRL_CHEN_Msk;
+    while ((GCLK_REGS->GCLK_SYNCBUSY & GCLK_SYNCBUSY_GENCTRL_GCLK3)
+            == GCLK_SYNCBUSY_GENCTRL_GCLK3)
+    {
+        /* Wait for Generator 3 sync — requires GCLKIN pin to be driven */
+    }
+
+    // Connect Generator 3 to TC2/TC3 peripheral channel (PCHCTRL[26])
+    GCLK_REGS->GCLK_PCHCTRL[26] = GCLK_PCHCTRL_GEN(0x3U)
+                                  | GCLK_PCHCTRL_CHEN_Msk;
+
+    while ((GCLK_REGS->GCLK_PCHCTRL[26] & GCLK_PCHCTRL_CHEN_Msk)
+            != GCLK_PCHCTRL_CHEN_Msk)
+    {
+        /* Wait for peripheral channel sync */
+    }
+}
 ```
 
 > **Why PCHCTRL[26]?** Per the SAM D5x/E5x datasheet, index 26 maps to `GCLK_TC2_GCLK_TC3` — the shared clock channel for TC2 and TC3.
@@ -103,6 +122,7 @@ GCLK_REGS->GCLK_PCHCTRL[26] = GCLK_PCHCTRL_GEN(0x3U)
 ### SERCOM2 — UART / STDIO
 - Mode: UART
 - Connected to STDIO for `printf()`
+<img width="571" height="557" alt="image" src="https://github.com/user-attachments/assets/dde50e50-386e-4fbb-8d03-c9a4ab1860f8" />
 
 ## Initialization Order (Critical)
 
@@ -111,12 +131,12 @@ The order of initialization matters because of the GCLKIN dependency:
 ```c
 SYS_Initialize(NULL);               // Standard Harmony init (TC2 commented out here)
 TC0_TimerCallbackRegister(...);     // Register 1ms gate callback
-TC4_CompareStart();                 // ← MUST come first: starts GCLKIN signal
+// *** Ensure external signal is present on GCLKIN pin before this point ***
 GCLK3_Initialize_Custom();          // ← Safe now: clock source is present
 TC2_TimerInitialize();              // ← Safe now: GCLK3 is running
 ```
 
-If `GCLK3_Initialize_Custom()` is called before TC4 starts, the sync busy-loop will hang forever because the GCLKIN pin has no signal.
+> **Warning:** If `GCLK3_Initialize_Custom()` is called before a signal is present on the GCLKIN pin, the sync busy-loop will hang until a signal is present. Always verify your external source is running before powering the board.
 
 ## Key Functions
 
@@ -125,7 +145,6 @@ If `GCLK3_Initialize_Custom()` is called before TC4 starts, the sync busy-loop w
 | `TC0_Callback()` | ISR — stops both timers, captures TC2 count, sets flag |
 | `GCLK3_Initialize_Custom()` | Configures GCLK3 with GCLKIN source and routes to TC2 |
 | `TC2_Timer16bitCounterGet()` | Reads the raw pulse count from TC2 |
-| `TC4_CompareStart()` | Starts the test signal generator |
 
 ## Main Loop
 
@@ -177,7 +196,7 @@ To measure signals above 50 MHz, an **external prescaler/divider circuit** would
 
 ### Lockup on startup
 - **Cause:** GCLK3 initialized before TC4 is running
-- **Fix:** Ensure `TC4_CompareStart()` is called before `GCLK3_Initialize_Custom()`
+- **Fix:** Ensure your external signal source is running before the board initializes GCLK3
 
 ### Always reads 0 MHz
 - Verify TC2 is initialized after GCLK3 (`TC2_TimerInitialize()` called manually, not via `SYS_Initialize()`)

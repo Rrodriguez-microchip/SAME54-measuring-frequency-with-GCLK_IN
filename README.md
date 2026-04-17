@@ -161,17 +161,17 @@ static void TC0_Callback(TC_TIMER_STATUS status, uintptr_t context)
 
 ## Measurement Limitations
 
-| Parameter | Value |
-|---|---|
-| Gate window | 1 ms |
-| Counter size | 16-bit |
-| Max measurable frequency | **65.535 MHz** |
-| Frequency resolution | 1 kHz (0.001 MHz) |
+| Parameter | Value | Source |
+|---|---|---|
+| Gate window | 1 ms | TC0 configuration |
+| Counter size | 16-bit | TC2 hardware |
+| 16-bit counter ceiling | 65.535 MHz | 65,535 counts / 1ms |
+| **Actual max measurable frequency** | **50 MHz** | SAME54 GCLKIN pin limit (datasheet Table 54-6) |
+| Frequency resolution | 1 kHz (0.001 MHz) | 1 count / 1ms gate |
 
-To extend the range, options include:
-- **Shorter gate window** (e.g. 0.5ms → up to ~131 MHz, adjust divisor)
-- **GCLK3 prescaler** (e.g. DIV=4 → multiply result by 4, up to ~262 MHz)
-- **32-bit mode** (chain TC2+TC3 → effectively no overflow concern)
+> **Note:** Although the 16-bit TC2 counter could theoretically handle up to 65.535 MHz in a 1ms gate window, the **SAME54 GCLKIN pin is rated to a maximum of 50 MHz** per the electrical characteristics (DS60001507N, Table 54-6 — Maximum Peripheral Clock Frequencies). This is the true hardware ceiling for this design.
+
+To measure signals above 50 MHz, an **external prescaler/divider circuit** would be required before the GCLKIN pin, then multiply the result in software accordingly.
 
 ## Troubleshooting
 
